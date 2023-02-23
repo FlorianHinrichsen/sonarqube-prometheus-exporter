@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 
 import static java.util.Objects.nonNull;
 import org.sonarqube.ws.ProjectBranches.Branch;
+import org.sonarqube.ws.ProjectPullRequests.PullRequest;
 import org.sonarqube.ws.client.projectbranches.ListRequest;
 
 public class PrometheusWebService implements WebService {
@@ -77,6 +78,20 @@ public class PrometheusWebService implements WebService {
 
                     List<Components.Component> projects = getProjects(wsClient);
                     projects.forEach(project -> {
+                        List<PullRequest> pullRequests = getProjectPullRequests(wsClient, project);
+                        pullRequests.forEach(pullRequest -> {
+                            Measures.ComponentWsResponse wsResponse = getMeasures(wsClient, project, pullRequest);
+
+                            wsResponse.getComponent().getMeasuresList().forEach(measure -> {
+
+                                if (this.gauges.containsKey(measure.getMetric())) {
+                                    if (!measure.getValue().isEmpty()){
+                                        this.gauges.get(measure.getMetric()).labels(project.getKey(), project.getName(), pullRequest.getTitle()).set(Double.valueOf(measure.getValue()));
+                                    }
+                                }
+                            });
+                        });
+                        
                         List<Branch> branches = getProjectBranches(wsClient, project);
                         branches.forEach(branch -> {
                             Measures.ComponentWsResponse wsResponse = getMeasures(wsClient, project, branch);
@@ -131,6 +146,18 @@ public class PrometheusWebService implements WebService {
             .register()));
     }
 
+    private Measures.ComponentWsResponse getMeasures(WsClient wsClient, Components.Component project, PullRequest branch) {
+
+        List<String> metricKeys = this.enabledMetrics.stream()
+            .map(Metric::getKey)
+            .collect(Collectors.toList());
+
+        return wsClient.measures().component(new ComponentRequest()
+            .setComponent(project.getKey())
+            .setPullRequest(branch.getKey())
+            .setMetricKeys(metricKeys));
+    }    
+    
     private Measures.ComponentWsResponse getMeasures(WsClient wsClient, Components.Component project, Branch branch) {
 
         List<String> metricKeys = this.enabledMetrics.stream()
@@ -149,6 +176,10 @@ public class PrometheusWebService implements WebService {
             .setQualifiers(Collections.singletonList(Qualifiers.PROJECT))
             .setPs("500"))
             .getComponentsList();
+    }
+    
+    private List<PullRequest> getProjectPullRequests(WsClient wsClient, Components.Component project) {
+        return wsClient.projectPullRequests().list(new org.sonarqube.ws.client.projectpullrequests.ListRequest().setProject(project.getName())).getPullRequestsList();
     }
     
     private List<Branch> getProjectBranches(WsClient wsClient, Components.Component project) {
